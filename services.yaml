@@ -1,0 +1,18 @@
+- System:
+    - Pi-hole:
+        icon: pi-hole.png
+        href: http://100.120.224.8/admin
+        description: DNS Ad Blocker
+
+- Storage:
+    - Samba:
+        icon: si-samba
+        href: smb://100.120.224.8/Public
+        description: "\\\\100.120.224.8\\Public — dán vào Explorer"
+
+- Remote:
+    - Tailscale:
+        icon: tailscale.png
+        href: https://login.tailscale.com/admin/machines
+        description: Remote Access
+

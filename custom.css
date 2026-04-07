@@ -1,0 +1,13 @@
+#custom-metrics-block {
+  width: 100%;
+}
+
+#custom-metrics-block canvas {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+#custom-metrics-block h2,
+#custom-metrics-block h3 {
+  letter-spacing: 0.01em;
+}

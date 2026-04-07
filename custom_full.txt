@@ -1,0 +1,280 @@
+(function () {
+  const REFRESH_MS = 15000;
+  const TIMER_KEY = '__homepageMetricsTimer__';
+  const INIT_KEY = '__homepageMetricsInit__';
+  const KEEP_POINTS = 40;
+
+  function loadChartJs() {
+    return new Promise((resolve, reject) => {
+      if (window.Chart) return resolve();
+
+      const existing = document.querySelector('script[data-chartjs]');
+      if (existing) {
+        existing.addEventListener('load', resolve, { once: true });
+        existing.addEventListener('error', reject, { once: true });
+        return;
+      }
+
+      const s = document.createElement('script');
+      s.src = 'https://cdn.jsdelivr.net/npm/chart.js';
+      s.setAttribute('data-chartjs', 'true');
+      s.onload = resolve;
+      s.onerror = () => reject(new Error('Failed to load Chart.js'));
+      document.head.appendChild(s);
+    });
+  }
+
+  async function fetchCSV() {
+    const url = window.location.origin + '/system.csv?t=' + Date.now();
+    const res = await fetch(url, {
+      method: 'GET',
+      cache: 'no-store',
+      headers: {
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache',
+        'Expires': '0'
+      }
+    });
+
+    if (!res.ok) throw new Error('Cannot load /system.csv');
+
+    const text = await res.text();
+    const lines = text.trim().split('\n').slice(1);
+
+    const labels = [];
+    const cpu = [];
+    const ram = [];
+    const temp = [];
+    const power = [];
+
+    for (const line of lines) {
+      const [time, c, r, t, p] = line.split(',');
+      if (!time) continue;
+      labels.push(time);
+      cpu.push(parseFloat(c) || 0);
+      ram.push(parseFloat(r) || 0);
+      temp.push(parseFloat(t) || 0);
+      power.push(parseFloat(p) || 0);
+    }
+
+    return {
+      labels: labels.slice(-KEEP_POINTS),
+      cpu: cpu.slice(-KEEP_POINTS),
+      ram: ram.slice(-KEEP_POINTS),
+      temp: temp.slice(-KEEP_POINTS),
+      power: power.slice(-KEEP_POINTS)
+    };
+  }
+
+  function ensureChartBlock() {
+    let block = document.getElementById('custom-metrics-block');
+    if (block && document.body.contains(block)) return block;
+
+    const services = document.getElementById('services');
+    if (!services) throw new Error('#services not found');
+
+    block = document.createElement('div');
+    block.id = 'custom-metrics-block';
+    block.style.margin = '12px 8px 0 8px';
+
+    block.innerHTML = `
+      <div class="services-group basis-full flex-1 p-1">
+        <h2 class="flex text-theme-800 dark:text-theme-300 text-xl font-medium mb-3">Metrics</h2>
+        <div class="rounded-md shadow-md shadow-theme-900/10 dark:shadow-theme-900/20 bg-theme-100/20 dark:bg-white/5 p-4">
+          <div id="metrics-status" style="font-size:12px; margin-bottom:12px; opacity:0.85;">Loading...</div>
+
+          <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:12px; align-items:start;">
+            <div style="background:rgba(255,255,255,0.03); border-radius:10px; padding:12px;">
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                <div style="font-size:14px; font-weight:600;">CPU</div>
+                <div id="cpu-current" style="font-size:18px; font-weight:700;">0%</div>
+              </div>
+              <div style="position:relative; height:180px;">
+                <canvas id="cpuChart"></canvas>
+              </div>
+            </div>
+
+            <div style="background:rgba(255,255,255,0.03); border-radius:10px; padding:12px;">
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                <div style="font-size:14px; font-weight:600;">RAM</div>
+                <div id="ram-current" style="font-size:18px; font-weight:700;">0%</div>
+              </div>
+              <div style="position:relative; height:180px;">
+                <canvas id="ramChart"></canvas>
+              </div>
+            </div>
+
+            <div style="background:rgba(255,255,255,0.03); border-radius:10px; padding:12px;">
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                <div style="font-size:14px; font-weight:600;">Temperature</div>
+                <div id="temp-current" style="font-size:18px; font-weight:700;">0 C</div>
+              </div>
+              <div style="position:relative; height:180px;">
+                <canvas id="tempChart"></canvas>
+              </div>
+            </div>
+
+            <div style="background:rgba(255,255,255,0.03); border-radius:10px; padding:12px;">
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                <div style="font-size:14px; font-weight:600;">Power</div>
+                <div id="power-current" style="font-size:18px; font-weight:700;">0 W</div>
+              </div>
+              <div style="position:relative; height:180px;">
+                <canvas id="powerChart"></canvas>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+
+    services.insertAdjacentElement('afterend', block);
+    return block;
+  }
+
+  function setStatus(text) {
+    const el = document.getElementById('metrics-status');
+    if (el) el.textContent = text;
+  }
+
+  function destroyIfExists(id) {
+    const canvas = document.getElementById(id);
+    if (!canvas) return null;
+    const oldChart = Chart.getChart(canvas);
+    if (oldChart) oldChart.destroy();
+    return canvas;
+  }
+
+  function makeDoughnut(canvas, value, color) {
+    return new Chart(canvas.getContext('2d'), {
+      type: 'doughnut',
+      data: {
+        labels: ['Used', 'Remaining'],
+        datasets: [{
+          data: [value, Math.max(0, 100 - value)],
+          backgroundColor: [color, 'rgba(148,163,184,0.18)'],
+          borderWidth: 0
+        }]
+      },
+      options: {
+        animation: false,
+        responsive: true,
+        maintainAspectRatio: false,
+        cutout: '70%',
+        plugins: {
+          legend: { display: false },
+          tooltip: { enabled: true }
+        }
+      }
+    });
+  }
+
+  function makeLine(canvas, labels, data, color, yLabel) {
+    return new Chart(canvas.getContext('2d'), {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [{
+          label: yLabel,
+          data,
+          borderColor: color,
+          backgroundColor: 'transparent',
+          pointRadius: 0,
+          borderWidth: 2,
+          tension: 0.25
+        }]
+      },
+      options: {
+        animation: false,
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { display: false }
+        },
+        scales: {
+          x: {
+            ticks: { color: '#cbd5e1', maxTicksLimit: 6 },
+            grid: { color: 'rgba(255,255,255,0.06)' }
+          },
+          y: {
+            ticks: { color: '#cbd5e1' },
+            grid: { color: 'rgba(255,255,255,0.06)' }
+          }
+        }
+      }
+    });
+  }
+
+  async function renderOnce() {
+    await loadChartJs();
+    ensureChartBlock();
+
+    const data = await fetchCSV();
+
+    const latestCpu = data.cpu[data.cpu.length - 1] || 0;
+    const latestRam = data.ram[data.ram.length - 1] || 0;
+    const latestTemp = data.temp[data.temp.length - 1] || 0;
+    const latestPower = data.power[data.power.length - 1] || 0;
+
+    document.getElementById('cpu-current').textContent = latestCpu.toFixed(0) + '%';
+    document.getElementById('ram-current').textContent = latestRam.toFixed(0) + '%';
+    document.getElementById('temp-current').textContent = latestTemp.toFixed(1) + ' C';
+    document.getElementById('power-current').textContent = latestPower.toFixed(1) + ' W';
+
+    const cpuCanvas = destroyIfExists('cpuChart');
+    const ramCanvas = destroyIfExists('ramChart');
+    const tempCanvas = destroyIfExists('tempChart');
+    const powerCanvas = destroyIfExists('powerChart');
+
+    if (!cpuCanvas || !ramCanvas || !tempCanvas || !powerCanvas) {
+      throw new Error('One or more canvases not found');
+    }
+
+    makeDoughnut(cpuCanvas, latestCpu, '#ff4d4f');
+    makeDoughnut(ramCanvas, latestRam, '#4096ff');
+    makeLine(tempCanvas, data.labels, data.temp, '#faad14', 'Temp C');
+    makeLine(powerCanvas, data.labels, data.power, '#52c41a', 'Power W');
+
+    const latest = data.labels[data.labels.length - 1] || 'n/a';
+    setStatus(
+      'Last CSV point: ' +
+      latest +
+      ' | Rows: ' +
+      data.labels.length +
+      ' | Refreshed: ' +
+      new Date().toLocaleTimeString()
+    );
+  }
+
+  async function loop() {
+    try {
+      await renderOnce();
+    } catch (err) {
+      console.error('Metrics chart error:', err);
+      setStatus('Error: ' + err.message);
+    } finally {
+      clearTimeout(window[TIMER_KEY]);
+      window[TIMER_KEY] = setTimeout(loop, REFRESH_MS);
+    }
+  }
+
+  function boot() {
+    if (window[INIT_KEY]) return;
+    window[INIT_KEY] = true;
+    loop();
+
+    const observer = new MutationObserver(() => {
+      const block = document.getElementById('custom-metrics-block');
+      if (!block || !document.body.contains(block)) {
+        window[INIT_KEY] = false;
+        clearTimeout(window[TIMER_KEY]);
+        boot();
+      }
+    });
+
+    observer.observe(document.body, { childList: true, subtree: true });
+  }
+
+  window.addEventListener('load', () => setTimeout(boot, 1000));
+})();

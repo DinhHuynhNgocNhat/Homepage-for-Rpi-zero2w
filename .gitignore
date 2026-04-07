@@ -1,0 +1,20 @@
+# logs
+*.log
+
+# generated runtime csv
+history.csv
+system.csv
+daily_stats.csv
+monthly_stats.csv
+yearly_stats.csv
+
+# backups / temp
+*.bak
+*.save
+custom.jsu
+test_backup/
+logs/
+
+# optional OS/editor junk
+.DS_Store
+Thumbs.db
